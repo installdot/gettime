@@ -1,5 +1,7 @@
 from flask import Flask, Response
 import requests
+import threading
+import time
 import re
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
@@ -84,5 +86,19 @@ def home():
     release_info = get_release_time()
     return Response(release_info, mimetype="text/plain; charset=utf-8")
 
+# Background task to send requests every 5 seconds
+def auto_request():
+    while True:
+        try:
+            requests.get("https://gettime-sng5.onrender.com/")
+            requests.get("http://127.0.0.1:5000/")  # Request to itself
+        except Exception as e:
+            print(f"Request error: {e}")
+        time.sleep(5)
+
+# Start the background thread
+thread = threading.Thread(target=auto_request, daemon=True)
+thread.start()
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0")
+    app.run(host="0.0.0.0", port=5000)
