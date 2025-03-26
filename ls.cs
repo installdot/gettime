@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Security.Authentication;
@@ -34,8 +33,8 @@ class Program
         "https://www.youtube.com/"
     };
 
-    static string GetRandom(List<string> list) => list[rand.Next(list.Count)];
-    static string GenerateRandomIP() => $"{rand.Next(1, 255)}.{rand.Next(0, 255)}.{rand.Next(0, 255)}.{rand.Next(1, 255)}";
+    static string GetRandom(List<string> list) { return list[rand.Next(list.Count)]; }
+    static string GenerateRandomIP() { return string.Format("{0}.{1}.{2}.{3}", rand.Next(1, 255), rand.Next(0, 255), rand.Next(0, 255), rand.Next(1, 255)); }
 
     static HttpClientHandler CreateHandler()
     {
@@ -105,9 +104,9 @@ class Program
             {
                 Console.Clear();
                 Console.WriteLine("🔥 HTTP Attack Running 🔥");
-                Console.WriteLine($"⏳ Time Left: {attackDuration - (int)timer.Elapsed.TotalSeconds}s");
-                Console.WriteLine($"🔄 Active Threads: {activeThreads}");
-                Console.WriteLine($"📊 Total Requests Sent: {totalRequests}");
+                Console.WriteLine("⏳ Time Left: " + (attackDuration - (int)timer.Elapsed.TotalSeconds) + "s");
+                Console.WriteLine("🔄 Active Threads: " + activeThreads);
+                Console.WriteLine("📊 Total Requests Sent: " + totalRequests);
 
                 if (timer.Elapsed.TotalSeconds >= attackDuration)
                 {
@@ -120,7 +119,7 @@ class Program
 
         Console.Clear();
         Console.WriteLine("✅ Attack Completed!");
-        Console.WriteLine($"💥 Total Requests Sent: {totalRequests}");
+        Console.WriteLine("💥 Total Requests Sent: " + totalRequests);
     }
 
     static void Main()
