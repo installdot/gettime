@@ -1,7 +1,7 @@
 const fs = require('fs');
 const { spawn, exec } = require('child_process');
 const https = require('https');
-const Jimp = require('jimp');
+import Jimp from 'jimp';
 const readline = require('readline');
 
 const GIF_FILE = 'hoshino.gif';
