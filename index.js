@@ -1,7 +1,7 @@
 const fs = require('fs');
 const { spawn, exec } = require('child_process');
 const https = require('https');
-import Jimp from 'jimp';
+const Jimp = require('jimp');
 const readline = require('readline');
 
 const GIF_FILE = 'hoshino.gif';
@@ -29,22 +29,28 @@ async function extractGifFrames(gifPath) {
 
 // Convert image to ASCII
 async function imageToAscii(imagePath) {
-    const image = await Jimp.read(imagePath);
-    image.resize(ASCII_WIDTH, ASCII_HEIGHT);
+    try {
+        const image = await Jimp.read(fs.readFileSync(imagePath)); // Ensure file is properly read
+        image.resize(ASCII_WIDTH, ASCII_HEIGHT);
 
-    let asciiImage = '';
-    for (let y = 0; y < image.bitmap.height; y++) {
-        let row = '';
-        for (let x = 0; x < image.bitmap.width; x++) {
-            const { r, g, b } = Jimp.intToRGBA(image.getPixelColor(x, y));
-            const brightness = (r + g + b) / 3;
-            const index = Math.floor((brightness / 255) * (BLOCKS.length - 1));
-            const colorCode = `\x1b[48;2;${r};${g};${b}m`; // Background block color
-            row += colorCode + BLOCKS[index];
+        let asciiImage = '';
+        for (let y = 0; y < image.bitmap.height; y++) {
+            let row = '';
+            for (let x = 0; x < image.bitmap.width; x++) {
+                const { r, g, b } = Jimp.intToRGBA(image.getPixelColor(x, y));
+                const brightness = (r + g + b) / 3;
+                const index = Math.floor((brightness / 255) * (BLOCKS.length - 1));
+                const colorCode = `\x1b[48;2;${r};${g};${b}m`; // Background block color
+                row += colorCode + BLOCKS[index];
+            }
+            asciiImage += row + '\x1b[0m\n';
         }
-        asciiImage += row + '\x1b[0m\n';
+        return asciiImage;
+    } catch (error) {
+        console.error(`\x1b[1;31m[ERROR]\x1b[0m Failed to read image: ${imagePath}`);
+        console.error(error);
+        return '';
     }
-    return asciiImage;
 }
 
 // Preload frames
