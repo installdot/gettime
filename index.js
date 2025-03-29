@@ -9,7 +9,7 @@ const FRAME_DELAY = 15; // Smooth animation
 const MAX_FRAMES = 20;
 const ASCII_WIDTH = 85;
 const ASCII_HEIGHT = 30;
-const PROXY_FILE = 'aaaaa.txt';
+const PROXY_FILE = 'prx.txt';
 const BLOCKS = ['█', '▓', '▒', '░', ' '];
 
 // Function to clear screen
