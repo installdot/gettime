@@ -1,5 +1,5 @@
 package main
-
+// w
 import (
     "crypto/tls"
     "flag"
@@ -27,7 +27,6 @@ var (
     requestCount uint64
     peakRPS      uint64
 
-    // Accept and User-Agent lists
     acceptList = []string{
         "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
         "application/json, text/javascript, */*; q=0.01",
@@ -46,7 +45,6 @@ var (
         "Mozilla/5.0 (Linux; Android 14; Pixel 7 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.3945.79 Mobile Safari/537.36",
     }
 
-    // Paths list
     paths = []string{"/", "/home", "/login", "/dashboard", "/api/data", "/status"}
 
     proxySources = []string{
@@ -162,8 +160,7 @@ func sendRequest(proxyAddr, target string) {
         return
     }
 
-    // TLS wrapping
-    tlsConn := tls.Client(conn, createTLSConfig())
+    // Wrap connection with TLS
     rawConn, _ := conn.(*net.TCPConn)
     rawConn.SetKeepAlive(true)
     rawConn.SetKeepAlivePeriod(30 * time.Second)
