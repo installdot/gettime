@@ -1,5 +1,5 @@
 package main
-// 3
+
 import (
     "crypto/tls"
     "fmt"
@@ -75,7 +75,7 @@ func main() {
 
     // Custom TLS configuration
     tlsConfig := &tls.Config{
-        CipherSuites: []uint16{ // Correct field name
+        CipherSuites: []uint16{
             tls.TLS_AES_128_GCM_SHA256,
             tls.TLS_AES_256_GCM_SHA384,
         },
@@ -86,23 +86,29 @@ func main() {
         NextProtos:         []string{"h2"},
     }
 
-    // Create fasthttp client with HTTP/2 and proxy support
+    // Custom dialer with higher timeout
+    dialer := &fasthttp.TCPDialer{
+        Concurrency: 20000,        // Match MaxConnsPerHost
+        DNSCacheDuration: time.Hour, // Reduce DNS lookups
+    }
+
+    // Create fasthttp client with HTTP/2 and higher timeouts
     client := &fasthttp.Client{
         MaxConnsPerHost:     20000,
-        ReadTimeout:         500 * time.Millisecond,
-        WriteTimeout:        500 * time.Millisecond,
+        ReadTimeout:         5 * time.Second, // Increased from 500ms to 5s
+        WriteTimeout:        5 * time.Second, // Increased from 500ms to 5s
         MaxIdleConnDuration: 0,
         TLSConfig:           tlsConfig,
         Dial: func(addr string) (net.Conn, error) {
             proxyIdx := int(atomic.AddInt64(&totalRequests, 1)) % len(proxies)
             if proxies[proxyIdx] == "" {
-                conn, err := fasthttp.Dial(addr)
+                conn, err := dialer.DialTimeout(addr, 5*time.Second) // Explicit 5s timeout
                 if err != nil {
                     fmt.Printf("Direct dial failed: %v\n", err)
                 }
                 return conn, err
             }
-            conn, err := fasthttp.DialDualStack(proxies[proxyIdx])
+            conn, err := dialer.DialDualStackTimeout(proxies[proxyIdx], 5*time.Second) // Explicit 5s timeout
             if err != nil {
                 fmt.Printf("Proxy dial failed (%s): %v\n", proxies[proxyIdx], err)
             }
@@ -121,7 +127,7 @@ func main() {
 
     // Start request sender
     startTime := time.Now()
-    workerCount := runtime.NumCPU() * 1000 // Define workerCount before loop
+    workerCount := runtime.NumCPU() * 1000
     for i := 0; i < workerCount; i++ {
         wg.Add(1)
         go func() {
