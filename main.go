@@ -26,7 +26,7 @@ func main() {
 
     // Create fasthttp client with optimizations
     client := &fasthttp.Client{
-        MaxConnsPerHost:     10000,           // High connection limit
+        MaxConnsPerHost:     1000000,           // High connection limit
         ReadTimeout:         1 * time.Second, // Fast timeout
         WriteTimeout:        1 * time.Second,
         MaxIdleConnDuration: 0, // Keep connections alive
