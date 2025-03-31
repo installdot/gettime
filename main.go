@@ -1,5 +1,5 @@
 package main
-// c
+// 3
 import (
     "crypto/tls"
     "fmt"
@@ -75,7 +75,7 @@ func main() {
 
     // Custom TLS configuration
     tlsConfig := &tls.Config{
-        CipherSuites: []uint16{ // Fixed: Changed Ciphers to CipherSuites
+        CipherSuites: []uint16{ // Correct field name
             tls.TLS_AES_128_GCM_SHA256,
             tls.TLS_AES_256_GCM_SHA384,
         },
