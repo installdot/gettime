@@ -1,5 +1,5 @@
 package main
-
+// 2
 import (
 	"crypto/tls"
 	"fmt"
@@ -48,12 +48,12 @@ type Stats struct {
 
 type ClientPool struct {
 	sync.Mutex
-	clients map[string]*http2.Client
+	clients map[string]*http.Client
 }
 
 func main() {
 	if len(os.Args) < 3 {
-		fmt.Println("TLSv1.3 (tls)\nUsage: go run tls.go [url] [thread]")
+		fmt.Println("TLSv1.3 (tls)\nUsage: go run main.go [url] [thread]")
 		os.Exit(1)
 	}
 
@@ -70,7 +70,7 @@ func main() {
 	fmt.Printf("Loaded %d proxies\n", len(proxyList))
 
 	stats := &Stats{}
-	clientPool := &ClientPool{clients: make(map[string]*http2.Client)}
+	clientPool := &ClientPool{clients: make(map[string]*http.Client)}
 	stopTime := time.Now().Add(duration)
 	ratePerThread := 100000 / threadCount
 
@@ -89,7 +89,7 @@ func main() {
 	printResults(target, stats)
 }
 
-func (cp *ClientPool) GetClient(proxy string) (*http2.Client, error) {
+func (cp *ClientPool) GetClient(proxy string) (*http.Client, error) {
 	cp.Lock()
 	defer cp.Unlock()
 
@@ -97,7 +97,6 @@ func (cp *ClientPool) GetClient(proxy string) (*http2.Client, error) {
 		return client, nil
 	}
 
-	proxyURL, _ := url.Parse(fmt.Sprintf("http://%s", proxy))
 	dialer := &net.Dialer{
 		Timeout:   5 * time.Second,
 		KeepAlive: 500 * time.Second,
@@ -118,9 +117,13 @@ func (cp *ClientPool) GetClient(proxy string) (*http2.Client, error) {
 			}
 			return tls.Client(conn, cfg), nil
 		},
+		AllowHTTP: true,
 	}
 
-	client := &http2.Client{Transport: transport}
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   5 * time.Second,
+	}
 	cp.clients[proxy] = client
 	return client, nil
 }
