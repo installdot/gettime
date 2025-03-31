@@ -1,5 +1,5 @@
 package main
-
+// c
 import (
     "crypto/tls"
     "fmt"
@@ -75,7 +75,7 @@ func main() {
 
     // Custom TLS configuration
     tlsConfig := &tls.Config{
-        Ciphers: []uint16{
+        CipherSuites: []uint16{ // Fixed: Changed Ciphers to CipherSuites
             tls.TLS_AES_128_GCM_SHA256,
             tls.TLS_AES_256_GCM_SHA384,
         },
@@ -121,7 +121,7 @@ func main() {
 
     // Start request sender
     startTime := time.Now()
-    workerCount := runtime.NumCPU() * 1000 // Fixed: Define workerCount before loop
+    workerCount := runtime.NumCPU() * 1000 // Define workerCount before loop
     for i := 0; i < workerCount; i++ {
         wg.Add(1)
         go func() {
