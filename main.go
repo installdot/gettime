@@ -121,7 +121,7 @@ func main() {
 
     // Start request sender
     startTime := time.Now()
-    worker    workerCount := runtime.NumCPU() * 1000
+    workerCount := runtime.NumCPU() * 1000 // Fixed: Define workerCount before loop
     for i := 0; i < workerCount; i++ {
         wg.Add(1)
         go func() {
