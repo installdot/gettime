@@ -1,5 +1,5 @@
 package main
-
+// ww
 import (
     "crypto/tls"
     "flag"
@@ -168,11 +168,13 @@ func sendRequest(proxyAddr, target string) {
     tlsConn := tls.Client(conn, createTLSConfig())
     defer tlsConn.Close()
 
-    // Set up HTTP/2 transport with the existing TLS connection
-    transport := &http2.Transport{}
-    if err := transport.Connect(tlsConn, parsedURL.Host); err != nil {
-        atomic.AddUint64(&errorCount, 1)
-        return
+    // Set up HTTP/2 transport using the existing TLS connection
+    transport := &http2.Transport{
+        DialTLS: func(network, addr string, cfg *tls.Config) (net.Conn, error) {
+            // Return the pre-established TLS connection instead of dialing a new one
+            return tlsConn, nil
+        },
+        TLSClientConfig: createTLSConfig(), // Still needed for configuration consistency
     }
 
     client := &http.Client{
