@@ -57,7 +57,7 @@ func init() {
                 TLSClientConfig: &tls.Config{
                     MinVersion:         tls.VersionTLS13,
                     MaxVersion:         tls.VersionTLS13,
-                    Ciphersuites:       []uint16{tls.TLS_AES_128_GCM_SHA256, tls.TLS_AES_256_GCM_SHA384},
+                    CipherSuites:       []uint16{tls.TLS_AES_128_GCM_SHA256, tls.TLS_AES_256_GCM_SHA384},
                     CurvePreferences:   []tls.CurveID{tls.X25519},
                     InsecureSkipVerify: true,
                 },
@@ -124,7 +124,6 @@ func randomPath() string {
 func attack(wg *sync.WaitGroup, stopChan chan struct{}) {
     defer wg.Done()
     
-    target, _ := url.Parse(targetURL)
     client := clientPool.Get().(*http.Client)
     defer clientPool.Put(client)
 
