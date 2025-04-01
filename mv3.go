@@ -1,9 +1,11 @@
 package main
 
 import (
+    "bytes"
     "crypto/tls"
     "flag"
     "fmt"
+    "io"
     "log"
     "math/rand"
     "net"
@@ -115,7 +117,7 @@ func fetchProxies() {
         }
         defer resp.Body.Close()
 
-        body, err := ioutil.ReadAll(resp.Body)
+        body, err := io.ReadAll(resp.Body)
         if err != nil {
             log.Printf("Warning: Failed to read proxy response from %s: %v", source, err)
             continue
@@ -198,11 +200,10 @@ func sendRequest(proxyAddr, target string) {
                 req.Header.Set(k, v)
             }
             atomic.AddUint64(&requestCount, 1)
-            _, err = client.Do(req) // Removed response handling
+            _, err = client.Do(req)
             if err != nil {
                 atomic.AddUint64(&errorCount, 1)
             }
-            // No resp.Body.Close() needed since we're not processing the response
         }()
     }
     wg.Wait()
