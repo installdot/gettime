@@ -1,5 +1,5 @@
 package main
-
+// w
 import (
     "crypto/tls"
     "flag"
@@ -55,7 +55,7 @@ var (
 
     clientPool = sync.Pool{
         New: func() interface{} {
-            transport := &http2 Transport{
+            transport := &http2.Transport{
                 TLSClientConfig: createTLSConfig(),
                 DialTLS: func(network, addr string, cfg *tls.Config) (net.Conn, error) {
                     return tls.Dial(network, addr, cfg)
@@ -76,7 +76,7 @@ func init() {
     flag.Parse()
 
     if targetURL == "" || duration == 0 {
-        fmt.Println("Usage: go run main.go -url [target] -time [seconds] -threads [count]")
+        fmt.Println("Usage: go run by.go -url [target] -time [seconds] -threads [count]")
         os.Exit(1)
     }
     fetchProxies()
