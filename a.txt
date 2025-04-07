@@ -1,0 +1,54 @@
+use reqwest::Client;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
+use futures::executor::block_on;
+
+async fn send_request(client: &Client, url: &str, counter: Arc<Mutex<u64>>) {
+    let _res = client.get(url).send().await;
+    let mut counter = counter.lock().unwrap();
+    *counter += 1;
+}
+
+fn main() {
+    let url = "https://mtdvps.com";
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true) // Accept invalid certificates if needed
+        .use_rustls_tls() // Enabling HTTP/2 and TLS using RustLS
+        .build()
+        .unwrap();
+
+    let counter = Arc::new(Mutex::new(0));
+    let total_requests = Arc::clone(&counter);
+
+    // Spawn threads to send requests
+    let mut handles = Vec::new();
+    for _ in 0..16 { // Use multiple threads to send requests concurrently
+        let client = client.clone();
+        let counter = Arc::clone(&counter);
+
+        let handle = thread::spawn(move || {
+            loop {
+                block_on(send_request(&client, url, counter.clone()));
+            }
+        });
+        handles.push(handle);
+    }
+
+    // Print the total requests every 10 seconds
+    thread::spawn(move || {
+        let start_time = Instant::now();
+        loop {
+            thread::sleep(Duration::from_secs(10));
+            let total = *total_requests.lock().unwrap();
+            println!("Requests sent in the last 10 seconds: {}", total);
+            println!("Total requests sent: {}", total);
+            *total_requests.lock().unwrap() = 0; // Reset the counter after each 10-second period
+        }
+    });
+
+    // Keep the main thread alive to let the other threads run
+    loop {
+        thread::sleep(Duration::from_secs(1));
+    }
+}
